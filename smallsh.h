@@ -13,6 +13,4 @@ struct command_line{
 
 
 //built_commands.c
-void smallsh_exit();
-void smallsh_cd(struct command_line *curr_command);
-void smallsh_status(struct command_line *curr_command);
+

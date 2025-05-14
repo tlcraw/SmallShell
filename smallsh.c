@@ -52,7 +52,7 @@ struct command_line *parse_input(){
             curr_command->output_file = strdup(strtok(NULL," \n"));
         } else if(!strcmp(token,"&")){
             curr_command->is_bg = true;
-        //add conditions to handle blank lines and comments
+        //conditions to handle blank lines and comments
         } else if(token[0] == '#'){
             break; // Ignore comments
         } else if(token[0] == '\0'){
@@ -69,18 +69,82 @@ struct command_line *parse_input(){
 
 int main(){
     struct command_line *curr_command;
+    int last_pid = 0;
+    int last_status_or_signal = 0;
+
+
 
     while(true){
         curr_command = parse_input();
         
         if(cmpstr(curr_command->argv, "exit") == 0 && curr_command->argc == 1){ // exit
-            smallsh_exit();
-        
-        }else if(cmpstr(curr_command->argv[0], "cd") == 0){ // change dir
-            smallsh_cd(&curr_command);
+            /*
+            cases to handle
+            1. exit command is run
+                a. kill all child processes
+                b. exit the shell
+
+            */
+            //kill all child processes
+            //exit the shell
+            exit(0); //do i need more than this?
+        }
+        else if(cmpstr(curr_command->argv[0], "cd") == 0){ // change dir
+            /*
+            cases to handle
+
+            1. no arguments
+                navigate to home directory
+
+            2. one argument
+                a. absolute path
+                b. relative path
+
+            */
+
+            if(curr_command->argc == 1){
+                // if no args, set PWD to HOME
+                setenv("PWD", getenv("HOME"), 1);
+            } 
+            else{
+                // if one arg, check if it is absolute or relative path
+                if (curr_command->argv[1][0] == '/'){
+                    // if absolute path, set PWD to the absolute path
+                    setenv("PWD", curr_command->argv[1], 1);
+                } 
+                else {
+                    // if relative path, set PWD to the relative path
+                    // this is a simplification, in reality we would need to resolve the relative path
+                    char *current_dir = getenv("PWD");
+                    char *new_dir = malloc(strlen(current_dir) + strlen(curr_command->argv[1]) + 2);
+
+                    strcpy(new_dir, current_dir);
+                    strcat(new_dir, "/");
+                    strcat(new_dir, curr_command->argv[1]);
+                    setenv("PWD", new_dir, 1);
+                    free(new_dir);
+                }
+                
+            }
         }else if(cmpstr(curr_command->argv[0], "status") == 0){ // show status of last fg(?) process
-            smallsh_status(&curr_command);
-        }else if (curr_command->argc > 0){
+            if(last_pid == 0){
+                exit(0);
+            }else{
+                return last_status_or_signal;
+            }
+            
+        }else if (curr_command->argc > 0){ // all other commands
+            int pid_t = getpid();
+            int fork_val = fork();
+            //if parent proc
+            if (fork_val != 0){
+                //if not a background process wait for the child to finish
+                if (curr_command->is_bg == false){
+                    waitpid()
+
+
+                }
+            }
 
         }
 
