@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #define INPUT_LENGTH 2048
 #define MAX_ARGS 512
 

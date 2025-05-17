@@ -31,6 +31,7 @@ This code has been taken and modified from the provided sample_parser.c file pro
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -70,6 +71,15 @@ struct command_line *parse_input(){
     return curr_command;
 }
 
+// Free the command line struct
+void free_command(struct command_line *cmd) {
+    for (int i = 0; i < cmd->argc; i++) {
+        free(cmd->argv[i]);
+    }
+    free(cmd->input_file);
+    free(cmd->output_file);
+    free(cmd);
+}
 
 int main(){
     struct command_line *curr_command;
@@ -81,9 +91,12 @@ int main(){
 
 
     while(true){
+        if (curr_command != NULL) {
+            free_command(curr_command); // Free the previously allocated memory
+        }
         curr_command = parse_input();
         
-        if(cmpstr(curr_command->argv, "exit") == 0 && curr_command->argc == 1){ // exit
+        if(strcmp(curr_command->argv[0], "exit") == 0 && curr_command->argc == 1){ // exit
             /*
             cases to handle
             1. exit command is run
@@ -93,9 +106,11 @@ int main(){
             */
             //kill all child processes
             //exit the shell
+            free_command(curr_command);
+            free(bg_pids);
             exit(0); //do i need more than this?
         }
-        else if(cmpstr(curr_command->argv[0], "cd") == 0){ // change dir
+        else if(strcmp(curr_command->argv[0], "cd") == 0){ // change dir
             /*
             cases to handle
 
@@ -109,31 +124,32 @@ int main(){
             */
 
             if(curr_command->argc == 1){
-                // if no args, set PWD to HOME
-                setenv("PWD", getenv("HOME"), 1);
+                // if no args, change working directory to HOME
+                chdir(getenv("HOME"));
             } 
             else{
                 // if one arg, check if it is absolute or relative path
                 if (curr_command->argv[1][0] == '/'){
-                    // if absolute path, set PWD to the absolute path
-                    setenv("PWD", curr_command->argv[1], 1);
+                    // if absolute path, change working directory to the absolute path
+                    chdir(curr_command->argv[1]);
                 } 
                 else {
-                    // if relative path, set PWD to the relative path
-                    // this is a simplification, in reality we would need to resolve the relative path
+                    // if relative path, construct the absolute path and change working directory to it
                     char *current_dir = getenv("PWD");
                     char *new_dir = malloc(strlen(current_dir) + strlen(curr_command->argv[1]) + 2);
 
                     strcpy(new_dir, current_dir);
                     strcat(new_dir, "/");
                     strcat(new_dir, curr_command->argv[1]);
-                    setenv("PWD", new_dir, 1);
+                    chdir(new_dir);
                     free(new_dir);
                 }
                 
             }
-        }else if(cmpstr(curr_command->argv[0], "status") == 0){ // show status of last fg(?) process
+        }else if(strcmp(curr_command->argv[0], "status") == 0){ // show status of last fg(?) process
             if(last_pid == 0){
+                free_command(curr_command);
+                free(bg_pids);
                 exit(0);
             }else{
                 return last_status_or_signal;
@@ -167,6 +183,7 @@ int main(){
                     break;
                 case 0: //child process
                     // check if input/output redirection is needed
+                    //input redirection
                     if(curr_command->input_file != NULL){
                         int input_fd = open(curr_command->input_file, O_RDONLY);
                         if(input_fd == -1){
@@ -175,7 +192,18 @@ int main(){
                         }
                         dup2(input_fd, STDIN_FILENO);
                         close(input_fd);
+                        //no input redirection
+                    } else if(curr_command->input_file == NULL){
+                        // if no input file, set input to /dev/null
+                        int input_fd = open("/dev/null", O_RDONLY);
+                        if(input_fd == -1){
+                            perror("open() failed");
+                            exit(1);
+                        }
+                        dup2(input_fd, STDIN_FILENO);
+                        close(input_fd);
                     }
+                    //output redirection
                     if(curr_command->output_file != NULL){
                         int output_fd = open(curr_command->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);//open file for writing, create if it doesn't exist, truncate if it does, 
                                                                                                             //permissions read, write for owner, read for group and others 
@@ -185,11 +213,27 @@ int main(){
                         }
                         dup2(output_fd, STDOUT_FILENO);
                         close(output_fd);
+                        //no output redirection
+                    } else if(curr_command->output_file == NULL){
+                        // if no output file, set output to /dev/null
+                        int output_fd = open("/dev/null", O_WRONLY);
+                        if(output_fd == -1){
+                            perror("open() failed");
+                            exit(1);
+                        }
+                        dup2(output_fd, STDOUT_FILENO);
+                        close(output_fd);
                     }
                     // execute process
                     // there's more to this....
+                    printf("executed/n");
+                    fflush(stdout);
                     execlp(curr_command->argv[0], curr_command->argv[0], NULL);
-
+                    // do i need to retore the input/output file descriptors?
+                    // if execlp() fails, print error message and exit
+                    perror("execlp() failed");
+                    exit(1);
+                    break;
                 default: // parent process
                     int child_status;
                     if(curr_command->is_bg == false){
@@ -231,6 +275,7 @@ int main(){
                         
 
                         last_pid = child_id;
+                    }
 
             }
 
