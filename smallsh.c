@@ -3,7 +3,7 @@ Taylor Crawford
 CS 374 Spring 2025
 Assignment 4L Small Shell
 Created: 05/08/2026
-Modified: 05/10/2025
+Modified: 05/17/2025
 
 In this assignment you will write your own shell in C called smallsh. smallsh will implement a subset of features of well-known shells, such as bash. Your program will
 
@@ -57,11 +57,6 @@ struct command_line *parse_input(){
             curr_command->output_file = strdup(strtok(NULL," \n"));
         } else if(!strcmp(token,"&")){
             curr_command->is_bg = true;
-        //conditions to handle blank lines and comments
-        } else if(token[0] == '#'){
-            break; // Ignore comments
-        } else if(token[0] == '\0'){
-            break; // Ignore blank lines
         } else{
             curr_command->argv[curr_command->argc++] = strdup(token);
         }
@@ -91,11 +86,18 @@ int main(){
 
 
     while(true){
+        
         if (curr_command != NULL) {
             free_command(curr_command); // Free the previously allocated memory
         }
         curr_command = parse_input();
-        
+
+        if (curr_command->argc ==0){ // empty commands
+            continue; // Ignore empty commands
+        }
+        if (curr_command->argv[0][0] == '#'){ // comment
+            continue; // Ignore comments
+        }
         if(strcmp(curr_command->argv[0], "exit") == 0 && curr_command->argc == 1){ // exit
             /*
             cases to handle
@@ -123,34 +125,31 @@ int main(){
 
             */
 
-            if(curr_command->argc == 1){
-                // if no args, change working directory to HOME
-                chdir(getenv("HOME"));
-            } 
-            else{
-                // if one arg, check if it is absolute or relative path
-                if (curr_command->argv[1][0] == '/'){
-                    // if absolute path, change working directory to the absolute path
-                    chdir(curr_command->argv[1]);
-                } 
-                else {
-                    // if relative path, construct the absolute path and change working directory to it
-                    char *current_dir = getenv("PWD");
-                    char *new_dir = malloc(strlen(current_dir) + strlen(curr_command->argv[1]) + 2);
-
-                    strcpy(new_dir, current_dir);
-                    strcat(new_dir, "/");
-                    strcat(new_dir, curr_command->argv[1]);
-                    chdir(new_dir);
-                    free(new_dir);
+            if (curr_command->argc == 1) {
+                // No arguments, go to home directory
+                if (chdir(getenv("HOME")) == -1) {
+                    perror("chdir() failed");
                 }
+            } else {
+                // Attempt to change directory, chdir should handle relative vs absolute paths by itself
+                if (chdir(curr_command->argv[1]) == -1) {
+                    perror("chdir() failed");
+                }
+            } 
+            // Update PWD to reflect the new working directory
+            char cwd[INPUT_LENGTH];
+            if (getcwd(cwd, sizeof(cwd)) != NULL) {
+                setenv("PWD", cwd, 1);
+            } else {
+                perror("getcwd() failed");
+            }  
                 
-            }
+            
         }else if(strcmp(curr_command->argv[0], "status") == 0){ // show status of last fg(?) process
             if(last_pid == 0){
-                free_command(curr_command);
-                free(bg_pids);
-                exit(0);
+
+                printf("exit value %d\n", last_status_or_signal);
+                fflush(stdout);
             }else{
                 return last_status_or_signal;
             }
@@ -173,10 +172,9 @@ int main(){
             */   
 
             // fork a child process
-            pid_t spawnpid = getpid();
             pid_t child_id = fork();
             
-            switch (spawnpid){
+            switch (child_id){
                 case -1:
                     perror("fork() failed");
                     exit(1);
