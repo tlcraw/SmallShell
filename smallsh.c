@@ -30,6 +30,10 @@ This code has been taken and modified from the provided sample_parser.c file pro
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include "smallsh.h"
 
 struct command_line *parse_input(){
@@ -71,6 +75,8 @@ int main(){
     struct command_line *curr_command;
     int last_pid = 0;
     int last_status_or_signal = 0;
+    int *bg_pids = malloc(sizeof(int) * 100); // array to store background pids
+    int bg_count = 0; // number of background pids
 
 
 
@@ -134,16 +140,98 @@ int main(){
             }
             
         }else if (curr_command->argc > 0){ // all other commands
-            int pid_t = getpid();
-            int fork_val = fork();
-            //if parent proc
-            if (fork_val != 0){
-                //if not a background process wait for the child to finish
-                if (curr_command->is_bg == false){
-                    waitpid()
+            /*
+            other commands will be handled by execlp()/execcvp(), fork() and waitpid()
+            1. fork() creates a child process
+                a. parent process waits for the child process to finish using waitpid()
 
+            2. child process uses execlp()/execcvp() to execute the command
 
-                }
+            3. shell uses PATH variable to look for non-built in commands and it must allow shell scripts to be executed
+
+            4. If a command fails because the shell could not find the command to run,  
+            then the shell will print an error message and set the exit status to 1
+
+            5. child process must terminate afte running a command ( whether the command is successful or fails) 
+
+            */   
+
+            // fork a child process
+            pid_t spawnpid = getpid();
+            pid_t child_id = fork();
+            
+            switch (spawnpid){
+                case -1:
+                    perror("fork() failed");
+                    exit(1);
+                    break;
+                case 0: //child process
+                    // check if input/output redirection is needed
+                    if(curr_command->input_file != NULL){
+                        int input_fd = open(curr_command->input_file, O_RDONLY);
+                        if(input_fd == -1){
+                            perror("open() failed");
+                            exit(1);
+                        }
+                        dup2(input_fd, STDIN_FILENO);
+                        close(input_fd);
+                    }
+                    if(curr_command->output_file != NULL){
+                        int output_fd = open(curr_command->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);//open file for writing, create if it doesn't exist, truncate if it does, 
+                                                                                                            //permissions read, write for owner, read for group and others 
+                        if(output_fd == -1){
+                            perror("open() failed");
+                            exit(1);
+                        }
+                        dup2(output_fd, STDOUT_FILENO);
+                        close(output_fd);
+                    }
+                    // execute process
+                    // there's more to this....
+                    execlp(curr_command->argv[0], curr_command->argv[0], NULL);
+
+                default: // parent process
+                    int child_status;
+                    if(curr_command->is_bg == false){
+                        // wait for child process to finish
+                        // i feel decent about this
+                        waitpid(child_id, &child_status, 0);
+                        if (WIFEXITED(child_status)){
+                            last_status_or_signal = WEXITSTATUS(child_status);
+                        } else if (WIFSIGNALED(child_status)){
+                            last_status_or_signal = WTERMSIG(child_status);
+                        }
+                        last_pid = child_id;
+                    } else if (curr_command->is_bg == true){
+                        // do not wait for child process to finish
+                        printf("background pid is %d\n", child_id);
+                        fflush(stdout);
+                        bg_pids[bg_count] = child_id;
+                        bg_count++;
+                        for(int i = 0; i < bg_count; i++){
+                            // check if background processes have finished
+                            int bg_status;
+                            pid_t bg_pid = waitpid(bg_pids[i], &bg_status, WNOHANG);
+                            if (bg_pid > 0){
+                                if (WIFEXITED(bg_status)){
+                                    last_status_or_signal = WEXITSTATUS(bg_status);
+                                } else if (WIFSIGNALED(bg_status)){
+                                    last_status_or_signal = WTERMSIG(bg_status);
+                                }
+                                // remove the pid from the array
+                                for (int j = i; j < bg_count - 1; j++){
+                                    bg_pids[j] = bg_pids[j + 1];
+                                }
+                                bg_count--; // decrement number of bg processes
+                                i--; // decrement index to account for removed pid
+                                printf("background pid %d is done: exit value %d\n", bg_pid, last_status_or_signal);
+                                fflush(stdout);
+                            }
+                        }
+                        
+
+                        last_pid = child_id;
+
             }
 
         }
