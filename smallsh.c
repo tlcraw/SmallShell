@@ -36,7 +36,7 @@ This code has been taken and modified from the provided sample_parser.c file pro
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include "smallsh.h"
+
 
 
 #include <stdbool.h>
