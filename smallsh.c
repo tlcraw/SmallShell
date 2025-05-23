@@ -43,6 +43,8 @@ This code has been taken and modified from the provided sample_parser.c file pro
 #define INPUT_LENGTH 2048
 #define MAX_ARGS 512
 
+static bool fg_mode = false; // foreground mode, & will be unnecessary and will be ignored. Global variable used so the signal handlers can change them
+
 // Struct copied from sample_parser.c givien in assignment 4
 struct command_line{
     char *argv[MAX_ARGS + 1];
@@ -89,6 +91,7 @@ void free_command(struct command_line *cmd) {
     for (int i = 0; i < cmd->argc; i++) {
         free(cmd->argv[i]);
     }
+
     free(cmd->input_file);
     free(cmd->output_file);
     free(cmd);
@@ -96,26 +99,32 @@ void free_command(struct command_line *cmd) {
 
 
 // Signal handlers----------------------------------------------------------------------------------------------------
+//_.~-^*:$ need to implement and insert singal handlers $:*^-~._
+//---------------------------------------------------------------------------------------------------------------------
 
-void ignore_SIGINT_SIGTSTP(int signo) {
-    // Ignore the signals and do nothing
-
-    // parent proc will ignore SIGINT
-    // bg children will ignore SIGINT
-
-    // fg children will ignore SIGTSTP
-    // bg children will ignore SIGTSTP
-
-}
 
 void handle_SIGINT(int signo) {
     // Handle SIGINT signal
     // will kill a child foreground process
+    _exit(0);
+ 
 }
 
 void handle_SIGTSTP(int signo) {
     // Handle SIGTSTP signal
     // will toggle the parent precess to and from foreground mode, & will be unnecessary and will be ignored
+
+    if (fg_mode == false){
+        // set fg_mode to true
+        fg_mode = true;
+        fprintf(stdout, "\nEntering foreground-only mode (& is now ignored)\n");
+        fflush(stdout);
+    } else if (fg_mode == true){
+        // set fg_mode to false
+        fprintf(stdout, "\nExiting foreground-only mode\n");
+        fflush(stdout);
+        fg_mode = false;
+    }
 }
 //--------------------------------------------------------------------------------------------------------------------
 
@@ -178,8 +187,13 @@ void smallsh_cd(struct command_line *curr_command){
 
 void smallsh_status(int last_status_or_signal){
 
-    printf("exit value %d\n", last_status_or_signal);
-    fflush(stdout);
+    if(last_status_or_signal != 0 && last_status_or_signal != 1){
+        printf("terminated by signal %d\n", last_status_or_signal);
+        fflush(stdout);
+    }else{
+        printf("exit value %d\n", last_status_or_signal);
+        fflush(stdout);
+    }
 }
 //--------------------------------------------------------------------------------------------------------------------
 
@@ -188,11 +202,28 @@ void smallsh_status(int last_status_or_signal){
 void smallsh_other_child_process(struct command_line *curr_command){
     // check if input/output redirection is needed
     //input redirection
+    sigset_t block_sigstp;
+    // block SIGTSTP in the child process
+    sigemptyset(&block_sigstp);
+    sigaddset(&block_sigstp, SIGTSTP);
+    sigprocmask(SIG_BLOCK, &block_sigstp, NULL);
+
+    if (curr_command->is_bg == false || fg_mode == true){
+        // if child is in fg, unblock SIGTINT
+        sigset_t unblock_sigint;
+
+        // block SIGTSTP in the main process
+        sigemptyset(&unblock_sigint);
+        sigaddset(&unblock_sigint, SIGINT);
+        sigprocmask(SIG_UNBLOCK, &unblock_sigint, NULL); 
+        signal(SIGINT, handle_SIGINT); // set SIGINT handler
+    }
+
     if(curr_command->input_file != NULL){
         int input_fd = open(curr_command->input_file, O_RDONLY);
         if(input_fd == -1){
             fprintf(stderr, "cannot open %s for input\n", curr_command->input_file);
-            exit(1);
+            _exit(1);
         }
         dup2(input_fd, STDIN_FILENO);
         close(input_fd);
@@ -219,13 +250,17 @@ void smallsh_other_child_process(struct command_line *curr_command){
     exit(1);
     
 }
-void smallsh_other_parent_process_bg(int *last_status_or_signal, int child_id, int *bg_pids, int *bg_count, int *last_pid){
+void smallsh_other_parent_process_bg(int child_id, int *bg_pids, int *bg_count, int *last_pid){
 
     // do not wait for child process to finish
     printf("background pid is %d\n", child_id);
     fflush(stdout);
     bg_pids[*bg_count] = child_id;
-    (*bg_count)++;
+    (*bg_count)++;   
+    *last_pid = child_id;
+}
+
+void smallsh_check_bg_procs(int *last_status_or_signal, int *bg_pids, int *bg_count){
     for(int i = 0; i < *bg_count; i++){
         // check if background processes have finished
         int bg_status;
@@ -242,11 +277,16 @@ void smallsh_other_parent_process_bg(int *last_status_or_signal, int child_id, i
             }
             (*bg_count)--; // decrement number of bg processes
             i--; // decrement index to account for removed pid
-            printf("background pid %d is done: exit value %d\n", bg_pid, *last_status_or_signal);
-            fflush(stdout);
+            if(*last_status_or_signal != 0 && *last_status_or_signal != 1){
+                printf("background pid %d is done: terminated by signal %d\n", bg_pid, *last_status_or_signal);
+                fflush(stdout);
+            } else {
+                // print exit value
+                printf("background pid %d is done: exit value %d\n", bg_pid, *last_status_or_signal);
+                fflush(stdout);
+            }
         }
     }
-    *last_pid = child_id;
 }
 
 void smallsh_other_parent_process_fg(int *last_status_or_signal, int child_id, int *last_pid){
@@ -258,7 +298,12 @@ void smallsh_other_parent_process_fg(int *last_status_or_signal, int child_id, i
     } else if (WIFSIGNALED(child_status)){
         *last_status_or_signal = WTERMSIG(child_status);
     }
-    last_pid = child_id;
+
+    if(*last_status_or_signal != 0 && *last_status_or_signal != 1){
+        printf("terminated by signal %d\n", *last_status_or_signal);
+        fflush(stdout);
+    }
+    *last_pid = child_id;
 }
 
 void smallsh_other_commands(struct command_line *curr_command, int *bg_pids, int *bg_count, int *last_status_or_signal, int *last_pid){
@@ -287,15 +332,18 @@ void smallsh_other_commands(struct command_line *curr_command, int *bg_pids, int
             exit(1);
             break;
         case 0: //child process
+            
             smallsh_other_child_process(curr_command);
             break;
         default: // parent process
+
+
             // fg processes
-            if(curr_command->is_bg == false){
-                smallsh_other_parent_process_fg(&last_status_or_signal, child_id, &last_pid);
+            if(curr_command->is_bg == false || fg_mode == true){
+                smallsh_other_parent_process_fg(last_status_or_signal, child_id, last_pid);
             // bg processes
-            } else if (curr_command->is_bg == true){
-                smallsh_other_parent_process_bg(&last_status_or_signal, child_id, bg_pids, &bg_count, &last_pid);
+            } else if (curr_command->is_bg == true && fg_mode == false){
+                smallsh_other_parent_process_bg(child_id, bg_pids, bg_count, last_pid);
             }
 
     }
@@ -307,11 +355,21 @@ void smallsh_other_commands(struct command_line *curr_command, int *bg_pids, int
 
 // Main function----------------------------------------------------------------------------------------------------
 int main(){
-    struct command_line *curr_command;
+    struct command_line *curr_command = NULL;
     int last_pid = 0;
     int last_status_or_signal = 0;
     int *bg_pids = malloc(sizeof(int) * 100); // array to store background pids
     int bg_count = 0; // number of background pids
+    sigset_t block_set;
+
+    // block SIGINT in the main process
+    sigemptyset(&block_set);
+    sigaddset(&block_set, SIGINT);
+    sigprocmask(SIG_BLOCK, &block_set, NULL); 
+
+    //handle SIGSTP (paraent process)
+    signal(SIGTSTP, handle_SIGTSTP); // set SIGTSTP handler
+     
 
 
 
@@ -320,6 +378,8 @@ int main(){
         if (curr_command != NULL) {
             free_command(curr_command); // Free the previously allocated memory
         }
+
+        smallsh_check_bg_procs(&last_status_or_signal, bg_pids, &bg_count); // check for background processes
         curr_command = parse_input();
 
         if (curr_command->argc ==0){ // empty commands
